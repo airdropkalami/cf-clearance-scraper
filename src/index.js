@@ -168,7 +168,10 @@ async function handleCftokenRequest(req, res) {
         siteKey: data.websiteKey,
         mode: 'turnstile-min',
         proxy: parsedProxy,
-        authToken: data.authToken
+        authToken: data.authToken,
+        // widget 的可选参数: 会被烤进 token, 站点要用 siteverify 回包里的这两个值比对
+        action: data.action,
+        cData: data.cData || data.cdata
     };
 
     // 处理请求

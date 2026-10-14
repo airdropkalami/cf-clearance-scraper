@@ -55,6 +55,13 @@ const schema = {
         },
         "action": {
             "type": "string"
+        },
+        // Turnstile widget 的 cData(大小写两种写法都放行)
+        "cData": {
+            "type": "string"
+        },
+        "cdata": {
+            "type": "string"
         }
     },
     "anyOf": [

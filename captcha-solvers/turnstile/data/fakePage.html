@@ -11,9 +11,15 @@
     <div class="turnstile"></div>
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onloadTurnstileCallback" defer></script>
     <script>
+        // <turnstile-options> 由 solveTurnstile.min.js 替换成 JSON({action, cData})。
+        // 这两个值会被烤进 token: 站点用 siteverify 回包里的 action/cdata 跟自己会话里存的那一份比对,
+        // 有些站点的 cData 每次请求都换, token 里不带就一律判无效。
+        // 没传这两个参数时这里就是 {}, 行为与改动前完全一致。
+        var extraOptions = <turnstile-options>;
         window.onloadTurnstileCallback = function () {
-            turnstile.render('.turnstile', {
-                sitekey: '<site-key>',
+            turnstile.render('.turnstile', Object.assign({
+                sitekey: '<site-key>'
+            }, extraOptions, {
                 callback: function (token) {
                     var c = document.createElement('input');
                     c.type = 'hidden';
@@ -21,9 +27,8 @@
                     c.value = token;
                     document.body.appendChild(c);
                 },
-            });
+            }));
         };
-
     </script>
 </body>
 

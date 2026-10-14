@@ -59,6 +59,24 @@ if (result.code === 200) {
 }
 ```
 
+**可选参数 `action` / `cData`**:
+
+这两个值会被 Cloudflare **烤进 token**，站点校验时用 siteverify 回包里的 `action` / `cdata` 跟自己会话里
+存的那一份比对。有些站点的 `cData` 是**每次请求都换**的一次性值，这种情况下不带 `cData` 的 token 会被
+站点判为无效（表现是站点自己的校验接口返回 403，而不是本服务报错）。遇到这类站点就把站点下发的值原样传进来：
+
+```javascript
+body: JSON.stringify({
+    type: "cftoken",
+    websiteUrl: "https://example.com",
+    websiteKey: "0x4AAAAAAA...",
+    action: "example-action",   // 可选，对应 turnstile.render 的 action
+    cData: "9f2c...",           // 可选，对应 turnstile.render 的 cData（`cdata` 小写写法也认）
+})
+```
+
+不传时行为与以前完全一致。
+
 ### 2. Cloudflare 5秒盾绕过 (cf5s)
 
 绕过 Cloudflare 5秒盾保护页面，获取完整的浏览器环境信息：
