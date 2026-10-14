@@ -1,0 +1,39 @@
+[Unit]
+# 用户级 systemd 服务: 开机(登录图形会话时)自启 + 崩了自动拉起 + 日志进 journald(自带轮转)。
+# 安装:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/cf-scraper.service ~/.config/systemd/user/
+#   # 按自己的路径改 WorkingDirectory 和 ExecStart 里的 node 路径
+#   systemctl --user daemon-reload && systemctl --user enable --now cf-scraper
+#   journalctl --user -u cf-scraper -f        # 看日志
+#
+# ★ 为什么绑在 graphical-session.target 上: 本服务的 Chrome 是 headless:false, 必须有图形会话
+#   (DISPLAY / WAYLAND_DISPLAY)。没有它, 浏览器会一直 connect ECONNREFUSED, 服务看着活着却干不了活。
+Description=cf-clearance-scraper (Cloudflare Turnstile / 5s 盾求解服务)
+PartOf=graphical-session.target
+# 反复起不来时别无限刷: 5 分钟内超过 5 次就停下(这两个键属于 [Unit], 放 [Service] 会被忽略)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Desktop/cf-clearance-scraper-fork
+ExecStart=%h/.nvm/versions/node/v23.11.0/bin/node start.js
+
+# 图形会话环境 —— headless:false 的 Chrome 少一个都起不来
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+Environment=NODE_ENV=production
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cf-scraper
+
+[Install]
+WantedBy=graphical-session.target

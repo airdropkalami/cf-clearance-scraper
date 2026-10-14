@@ -12,6 +12,32 @@ const memoryManager = require('./utils/memoryManager')
 const capacityManager = require('./utils/capacityManager')
 const { parseProxy } = require('./utils/proxyParser')
 
+// 求解器历史上用 reject("字符串") 抛错, 字符串没有 .message, 于是接口只回一个光秃秃的
+// {"code":500} —— 排障时完全看不出发生了什么。这里统一归一化: 字符串、Error、以及带
+// statusCode 的 Error 都能给出可读的 message 和正确的状态码。
+function errMessage(err) {
+    if (!err) return 'Unknown error'
+    if (typeof err === 'string') return err
+    return err.message || String(err)
+}
+function errStatus(err) {
+    const s = err && (err.statusCode || err.status)
+    return Number.isInteger(s) && s >= 400 && s <= 599 ? s : 500
+}
+
+// Turnstile token 的有效期是 300 秒, 排队久了拿到手就已经废了 —— 把时效一并告诉调用方。
+const TURNSTILE_TOKEN_TTL_SECONDS = 300
+function withTokenTtl(token) {
+    const now = Date.now()
+    return {
+        token,
+        code: 200,
+        issuedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + TURNSTILE_TOKEN_TTL_SECONDS * 1000).toISOString(),
+        expiresInSeconds: TURNSTILE_TOKEN_TTL_SECONDS
+    }
+}
+
 // 请求计数器（替代浏览器实例计数）
 global.activeRequestCount = 0
 // 注意：maxConcurrentRequests 现在由 capacityManager 智能管理
@@ -276,26 +302,26 @@ async function handleClearanceRequest(req, res, data) {
         switch (data.mode) {
             case "source":
                 result = await getSource(data).then(res => { return { source: res, code: 200 } }).catch(err => {
-                    console.error('getSource error:', err.message);
-                    return { code: 500, message: err.message }
+                    console.error('getSource error:', errMessage(err));
+                    return { code: errStatus(err), message: errMessage(err) }
                 })
                 break;
             case "turnstile-min":
-                result = await solveTurnstileMin(data).then(res => { return { token: res, code: 200 } }).catch(err => {
-                    console.error('solveTurnstileMin error:', err.message);
-                    return { code: 500, message: err.message }
+                result = await solveTurnstileMin(data).then(res => withTokenTtl(res)).catch(err => {
+                    console.error('solveTurnstileMin error:', errMessage(err));
+                    return { code: errStatus(err), message: errMessage(err) }
                 })
                 break;
             case "turnstile-max":
-                result = await solveTurnstileMax(data).then(res => { return { token: res, code: 200 } }).catch(err => {
-                    console.error('solveTurnstileMax error:', err.message);
-                    return { code: 500, message: err.message }
+                result = await solveTurnstileMax(data).then(res => withTokenTtl(res)).catch(err => {
+                    console.error('solveTurnstileMax error:', errMessage(err));
+                    return { code: errStatus(err), message: errMessage(err) }
                 })
                 break;
             case "waf-session":
                 result = await wafSession(data).then(res => { return { ...res, code: 200 } }).catch(err => {
-                    console.error('wafSession error:', err.message);
-                    return { code: 500, message: err.message }
+                    console.error('wafSession error:', errMessage(err));
+                    return { code: errStatus(err), message: errMessage(err) }
                 })
                 break;
             case "cf5s":
@@ -335,10 +361,10 @@ async function handleClearanceRequest(req, res, data) {
                         }
                     };
                 }).catch(err => {
-                    console.error('getCfClearance error:', err.message);
+                    console.error('getCfClearance error:', errMessage(err));
                     return {
-                        code: 500,
-                        message: err.message,
+                        code: errStatus(err),
+                        message: errMessage(err),
                         headers: {}
                     }
                 })
@@ -348,7 +374,7 @@ async function handleClearanceRequest(req, res, data) {
         }
     } catch (error) {
         console.error('Switch statement error:', error);
-        result = { code: 500, message: `Unexpected error: ${error.message}` };
+        result = { code: errStatus(error), message: `Unexpected error: ${errMessage(error)}` };
     }
 
     global.activeRequestCount--
@@ -422,7 +448,9 @@ async function handleClearanceRequest(req, res, data) {
         global.monitoringData.failedRequests++
     }
     
-    res.json(result)
+    // 以前这里无论成败都回 HTTP 200, 失败只体现在 body 的 code 字段里 —— 任何按状态码
+    // 判断的客户端和监控都会把失败当成功。现在状态码与 body 的 code 一致。
+    res.status(Number.isInteger(result.code) && result.code >= 400 ? result.code : 200).json(result)
 }
 
 // 监控API
@@ -782,6 +810,23 @@ async function performAutoRestart() {
 // 健康检查端点
 app.get('/health', (_, res) => {
     res.status(200).send('healthy\n')
+})
+
+// 存活 != 可用: /health 只说明进程还在, 浏览器连不上时它照样 healthy, 监控就看不出故障。
+// /ready 才是"现在能不能干活": 浏览器没起来回 503, 看门狗据此告警或重启。
+app.get('/ready', (_, res) => {
+    const connected = !!(global.browser && (typeof global.browser.connected === 'boolean'
+        ? global.browser.connected
+        : typeof global.browser.isConnected === 'function' ? global.browser.isConnected() : true))
+    const body = {
+        ready: connected,
+        browser: connected ? 'connected' : (global.browserInitFailed ? 'init-failed' : 'initializing'),
+        activeRequests: global.activeRequestCount || 0,
+        uptimeSeconds: Math.round(process.uptime())
+    }
+    if (!connected) body.hint = '浏览器未就绪。注意本服务的 Chrome 是 headless:false, 必须有图形会话'
+        + '(DISPLAY / WAYLAND_DISPLAY), 否则会一直连不上。'
+    res.status(connected ? 200 : 503).json(body)
 })
 
 // 浏览器状态检查端点
